@@ -1,0 +1,3 @@
+[submodule "examples/tsmc_12nm_sram"]
+	path = examples/tsmc_12nm_sram
+	url = https://github.com/Agent123123123/memory_generator_tsmc12nm.git
