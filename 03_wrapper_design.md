@@ -139,28 +139,49 @@ def write_request(run_dir, family, spec, kits, wrapper_info=None):
 
 ## 3.5 Compiler Invocation
 
+> **CRITICAL**: Use the proven pattern below. `bash run.sh` (with `module load` inside)
+> does NOT work reliably when called from a Python subprocess — `module` is not available
+> in non-interactive bash, and `bin/mc2-eu` is a wrapper script that triggers GUI mode
+> when stdin is a TTY. Always call `perl` directly with explicit env.
+
 ```python
-def run_compiler(run_dir: Path) -> subprocess.CompletedProcess:
+MC2_DIR = Path("/data/eda/tsmc/memory_compiler/tsmc_n12ffcllmc_20131200_100a/MC2_2013.12.00.f")
+
+def run_compiler(work_dir: Path, family: FamilySpec) -> subprocess.CompletedProcess:
+    script_path = family.compiler_dir / family.script_name
+    env = os.environ.copy()
+    env['MC2_INSTALL_DIR'] = str(MC2_DIR)
+    env['MC_HOME']         = str(family.compiler_dir)
+    env['PATH']            = str(MC2_DIR / 'bin' / 'Linux-64') + ':' + env.get('PATH', '')
+
     result = subprocess.run(
-        ['bash', 'run.sh'],
-        cwd=run_dir,
+        ['perl', str(script_path),
+         '-file', 'config.txt',
+         '-VERILOG', '-DATASHEET',
+         '-NonBIST', '-NonSLP', '-NonDSLP', '-NonSD'],
+        cwd=str(work_dir),
+        env=env,
+        capture_output=True,   # ← REQUIRED: prevents GUI mode detection via TTY
         text=True,
-        capture_output=True,
+        timeout=600,
     )
-    
-    # Always save log, regardless of success/failure
-    (run_dir / 'compiler.log').write_text(result.stdout + result.stderr)
-    
+    # Always save log regardless of success/failure
+    (work_dir / 'mc.log').write_text(result.stdout + result.stderr)
     return result
 ```
+
+A successful compile (~30s) produces `<work_dir>/<memory_name>_<version>/VERILOG/`.
+See `ref_code/memgen_reference.py` for a fully-working reference implementation.
 
 ### Environment Considerations
 
 | Concern | How to handle |
 |---------|--------------|
-| EDA module loading | `module load <name>` in run.sh |
+| mc2-eu binary | Use `bin/Linux-64/mc2-eu` (real binary), NOT `bin/mc2-eu` (wrapper) |
+| PATH setup | Prepend `$MC2_INSTALL_DIR/bin/Linux-64` before calling perl |
+| TTY / GUI mode | Always use `capture_output=True` in subprocess.run |
 | License contention | Retry with backoff, or check `lmstat` first |
-| Timeout | Set reasonable timeout (300s default, 600s for ROM/large) |
+| Timeout | 600s default; scale larger for big memories |
 | Parallel runs | Safe if each run uses its own directory |
 
 ## 3.6 Output Validation

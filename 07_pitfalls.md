@@ -285,7 +285,74 @@ with ProcessPoolExecutor(max_workers=MAX_LICENSES) as pool:
 
 ---
 
-## Summary: Top 10 Rules
+---
+
+## §7.X [CRITICAL] mc2-eu GUI Mode Hang — Compiler Produces No Output
+
+**Symptom**: `perl <family>.pl -file config.txt -VERILOG ...` completes in <0.1s,
+produces only a `.cfg` file, no `VERILOG/` subdirectory created, no `mc.log`.
+
+**Root cause**: `bin/mc2-eu` (found in PATH via `module load mc2_n12/2013.12`) is
+a **wrapper shell script** that symlinks to `.wrapper`. When `mc2-eu` detects that
+stdin is a TTY, it tries to launch in GUI mode. Without a display or in a non-
+interactive environment, it exits immediately without compiling.
+
+The **real binary** is at `$MC2_INSTALL_DIR/bin/Linux-64/mc2-eu`. This binary
+always runs in textual mode.
+
+**Fix**: When invoking MC from Python, prepend `bin/Linux-64` to PATH and set
+`MC2_INSTALL_DIR` explicitly. Call `perl` directly (do NOT use `bash run.sh`):
+
+```python
+MC2_DIR = Path("/data/eda/tsmc/memory_compiler/tsmc_n12ffcllmc_20131200_100a/MC2_2013.12.00.f")
+env = os.environ.copy()
+env['MC2_INSTALL_DIR'] = str(MC2_DIR)
+env['MC_HOME']         = str(family.compiler_dir)
+env['PATH']            = str(MC2_DIR / 'bin' / 'Linux-64') + ':' + env.get('PATH', '')
+
+result = subprocess.run(
+    ['perl', str(script_path),
+     '-file', 'config.txt',
+     '-VERILOG', '-DATASHEET',
+     '-NonBIST', '-NonSLP', '-NonDSLP', '-NonSD'],
+    cwd=str(work_dir),
+    env=env,
+    capture_output=True,   # ← REQUIRED: prevents GUI detection via TTY
+    text=True,
+    timeout=600,
+)
+```
+
+**Verification**: A successful compile takes ~30 seconds and produces:
+- `<work_dir>/mc.log` with `MC2 : Memory Compiler Software` header
+- `<work_dir>/<memory_name>_<version>/VERILOG/<memory_name>_<version>.v`
+
+**Do NOT** use `['bash', 'run.sh']` — the `module load` inside `run.sh` does not
+re-export `PATH` changes when bash is started as a non-interactive subprocess.
+
+---
+
+## §7.Y config.txt Format — Do NOT Put Flags in config.txt for 1prf/spsram/dpsram
+
+**Symptom**: `[Error] Option setting in config.txt file cannot be executed by gen perl script followed by options (e.g. <compiler_name>.pl -NonBIST -NonSD )`
+
+**Root cause**: These families require `-NonBIST`, `-NonSLP`, `-NonDSLP`, `-NonSD`
+to be passed as **command-line arguments** to the perl script, NOT written into
+`config.txt`.
+
+**Correct config.txt** (just the size spec, e.g.):
+```
+8x16m1s
+```
+
+**Correct perl invocation**:
+```bash
+perl tsn12ffcll1prf_130c.pl -file config.txt -VERILOG -DATASHEET -NonBIST -NonSLP -NonDSLP -NonSD
+```
+
+---
+
+## Summary: Top 12 Rules
 
 | # | Rule |
 |---|------|
@@ -299,3 +366,5 @@ with ProcessPoolExecutor(max_workers=MAX_LICENSES) as pool:
 | 8 | Include compiler models in `filelist.f` |
 | 9 | Centralize all foundry-specific paths in one config |
 | 10 | Scale compiler timeout with memory size |
+| 11 | **MC invocation: prepend `bin/Linux-64` to PATH, use `capture_output=True`** |
+| 12 | **config.txt: size spec only; BIST/power flags go on perl command line** |
